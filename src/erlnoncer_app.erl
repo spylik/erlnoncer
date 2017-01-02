@@ -16,7 +16,7 @@
 %% API.
 
 start(_Type, _Args) ->
-	erlnoncer:start_link().
+	erlnoncer_sup:start_link().
 
 stop(_State) ->
 	ok.

@@ -47,6 +47,20 @@
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
+% @doc we do not want to create separate supervisor to keep this kind of stuff, 
+% so we just adding erlnoncer to the kernel supervison tree
+-spec ensure_started() -> Result when
+    Result  :: 'ok'.
+
+ensure_started() ->
+    case whereis(?MODULE) of
+    undefined ->
+        C = {?MODULE, {?MODULE, start_link, []}, permanent, 1000, worker, [?MODULE]},
+        _ = supervisor:start_child('kernel_safe_sup', C),
+        ok;
+    _ -> ok
+    end.
+
 % @doc init gen_server
 -spec init([]) -> Result when
     Result  :: {'ok', [], 'infinity'}.
@@ -54,7 +68,6 @@ start_link() ->
 init([]) ->
     _ = ets:new(?TAB, [named_table, ordered_set, private]),
     {ok, [], infinity}.
-
 
 
 % To decrease numbers in nonce, bu default we going to start from 28 Dec 2016 (but of course - better every time from api creation date).
