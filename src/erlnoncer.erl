@@ -8,18 +8,26 @@
 %% Module for generate 10 digit nonce (max is 4294967294 what actually is 
 %% 11111111111111111111111111111110).
 %%
-%% Limitation: as call parameter we must always use NonceInInterval 
-%% what actually must be an integer from 1 till 99.
-%% We do not expect we will call single API more than 99 times per one second.
+%% Limitation: as we do not expect we will call single API more than 99 times per
+%% one scond, we must always use as call parameter NonceInInterval, what actually
+%% must be an integer between 1 and 99.
+%% 
 %% Possible strategies for flushing NonceInInterval:
 %% - in any case flush every time once reach 99
 %% 
 %% @end
 %% --------------------------------------------------------------------------------
--module(nonce).
+-module(erlnoncer).
 
-%% gen server is here
-%-behaviour(gen_server).
+-type nonce()       :: 1..4294967294 | binary() | list().
+-type return_nonce():: {'normal' | 'next_interval_nonce_must_flush', nonce()}.
+
+-define(dec282016ms, 1482924639084).
+-define(TAB, erlnoncer_tab).
+
+-export_type([
+    nonce/0
+    ]).
 
 % @doc public api
 -export([
@@ -28,18 +36,26 @@
       gen_nonce/3
     ]).
 
-% gen_server api
-%-export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-%         terminate/2, code_change/3]).
+% export standart gen_server api
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2,
+         terminate/2, code_change/3]).
 
--type nonce()       :: 1..4294967294 | binary() | list().
--type return_nonce():: {'normal' | 'next_interval_nonce_must_flush', nonce()}.
+% @doc erlnoncer gen_server start_api
+-spec start_link() -> Result when
+    Result  :: {'ok', pid()} | {'error', term()}.
 
--define(dec282016ms, 1482924639084).
+start_link() ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
--export_type([
-    nonce/0
-    ]).
+% @doc init gen_server
+-spec init([]) -> Result when
+    Result  :: {'ok', [], 'infinity'}.
+
+init([]) ->
+    _ = ets:new(?TAB, [named_table, ordered_set, private]),
+    {ok, [], infinity}.
+
+
 
 % To decrease numbers in nonce, bu default we going to start from 28 Dec 2016 (but of course - better every time from api creation date).
 % Limitation: we do not expect we will call single API more than 99 times per second.
