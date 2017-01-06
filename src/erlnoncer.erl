@@ -30,13 +30,12 @@
     nonce/0
     ]).
 
+-define(TAB(Pid), list_to_atom(lists:concat([?MODULE, "_", pid_to_list(Pid)]))).
+
 % @doc public api
 -export([
         start_link/0,
-        start_link/1,
-        gen_nonce/1, 
-        gen_nonce/2,  
-        gen_nonce/3
+        start_link/1
     ]).
 
 % @doc export standart gen_server api
@@ -56,27 +55,37 @@ start_link() ->
     Result      :: {'ok', pid()} | {'error', term()}.
 
 start_link(Prop) ->
-    Register = maps:get('register', Prop, 'undefined'),
-    InitState = #nonce_state{
-        
+    RegisterAs = maps:get('register', Prop, 'undefined'),
+    InitState = #noncer_state{
+        'heartbeat_freq' = maps:get('heartbeat_freq', Prop, 1000)
     },
-    case Register =:= 'undefined' of
+    case RegisterAs =:= 'undefined' of
         true ->
-            gen_server:start_link(?MODULE, InitState, []);
+            gen_server:start_link({local, ?MODULE}, ?MODULE, InitState, []);
         false ->
-            gen_server:start_link(Register, ?MODULE, InitState, [])
+            gen_server:start_link(RegisterAs, ?MODULE, InitState, [])
     end.
 
-
 % @doc init gen_server
--spec init([]) -> Result when
-    Result  :: {'ok', [], 'infinity'}.
+-spec init(InitState) -> Result when
+    InitState   :: noncer_state(),
+    Result      :: {ok, NState},
+    NState      :: noncer_state().
 
-init([]) ->
-    _ = ets:new(?TAB, [ordered_set, private, {keypos, #nonce_track.api_ref}, named_table]),
+init(InitState = #noncer_state{
+        heartbeat_freq = Heartbeat_freq
+    }) ->
+
+    % we going to create ets table like 'erlnoncer_32423'
+    TabName = ?TAB(self()),
+    _ = ets:new(TabName, [ordered_set, private, {keypos, #nonce_track.api_ref}, named_table]),
+    Time = erlang:system_time('seconds'),
+    TRef = erlang:send_after(Heartbeat_freq, self(), 'heartbeat'),
     {ok, 
-        #nonce_state{
-
+        InitState#noncer_state{
+            last_time_insec = Time,
+            ets_table = TabName,
+            heartbeat_tref = TRef
         }
     }.
 
@@ -87,9 +96,44 @@ init([]) ->
     Message     :: term(),
     From        :: {pid(), Tag},
     Tag         :: term(),
-    State       :: nonce_state(),
+    State       :: noncer_state(),
     Result      :: {reply, term(), State}.
 
+handle_call({'gen_nonce', OutType, ApiRef, ApiBase}, _From, State = noncer_state{
+        ets_table = EtsTable,
+        last_time_insec = Time
+    }) ->
+    Base = case ApiBase of
+        {'second', Since} ->
+            Time - Since;
+        {'millisecond', Since} ->
+            Time - erlang:convert_time_unit(Since, 'milli_seconds', 'seconds')
+    end,
+    NonceInInterval = case ets:lookup(EtsTable, ApiRef) of
+        [] -> 
+            ets:insert(EtsTable, #nonce_track{
+                    api_ref = ApiRef,
+                    shift = 0
+                }),
+            1;
+        [#nonce_track{shift = Shift}] ->
+            NewShift = Shift+1,
+            ets:insert(EtsTable, #nonce_track{
+                    api_ref = ApiRef,
+                    shift = NewShift
+                }),
+            NewShift
+    end,
+    {Nonce, NewState} = case gen_nonce_with_base(OutType, NonceInInterval, Base) of
+        'next' when heartbeat_freq =:= 1000 ->
+            {{'wait', 1000}, State};
+        'next' ->
+            {Wait, NewState} = flush(State),
+            {{'wait', Wait}, NewState}, 
+        Nonce ->
+            {Nonce, State}
+    end,
+    {reply, Nonce, NewState};
 
 % handle_call for all other thigs
 handle_call(Msg, _From, State) ->
@@ -98,13 +142,14 @@ handle_call(Msg, _From, State) ->
 
 %-----------end of handle_call-------------
 
+flush(State) ->
 
 %--------------handle_cast-----------------
 
 % @doc callbacks for handle_cast
 -spec handle_cast(Message, State) -> Result when
-    Message :: market_frames:market_frame(),
-    State   :: nonce_state(),
+    Message :: 'stop',
+    State   :: noncer_state(),
     Result  :: {noreply, State} | {stop, normal, State}.
 
 % handle_cast for stop
@@ -122,9 +167,26 @@ handle_cast(Msg, State) ->
 
 % @doc callbacks for gen_server handle_info.
 -spec handle_info(Message, State) -> Result when
-    Message :: term(),
-    State   :: nonce_state(),
+    Message :: 'heartbeat',
+    State   :: noncer_state(),
     Result  :: {noreply, State}.
+
+% @doc flush all counters on hearbeat
+handle_info('heartbeat', State = #erlnoncer_state{
+        heartbeat_tref = Heartbeat_tref,
+        heartbeat_freq = Heartbeat_freq,
+        ets_table = EtsTable
+    }) ->
+    _ = erlang:cancel_timer(Heartbeat_tref),
+    Time = erlang:system_time('seconds'),
+    % need to test what is faster - delete ets and create new for flush or ets:delete_all_objects
+    true = ets:delete_all_objects(EtsTable),
+    TRef = erlang:send_after(Heartbeat_freq, self(), 'heartbeat'),
+    {noreply, State#erlnoncer_state{
+            heartbeat_tref = TRef,
+            last_time_insec = Time 
+        }
+    };
 
 %% handle_info for all other thigs
 handle_info(Msg, State) ->
@@ -135,7 +197,7 @@ handle_info(Msg, State) ->
 % @doc call back for gen_server terminate
 -spec terminate(Reason, State) -> term() when
     Reason  :: 'normal' | 'shutdown' | {'shutdown',term()} | term(),
-    State   :: nonce_state().
+    State   :: noncer_state().
 
 terminate(Reason, State) ->
     {noreply, Reason, State}.
@@ -144,10 +206,10 @@ terminate(Reason, State) ->
 -spec code_change(OldVsn, State, Extra) -> Result when
     OldVsn  :: Vsn | {down, Vsn},
     Vsn     :: term(),
-    State   :: nonce_state(),
+    State   :: noncer_state(),
     Extra   :: term(),
     Result  :: {ok, NewState},
-    NewState :: nonce_state().
+    NewState :: noncer_state().
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
@@ -155,49 +217,50 @@ code_change(_OldVsn, State, _Extra) ->
 
 % --------------------------- end of gen_server part ---------------------------
 
-% To decrease numbers in nonce, bu default we going to start from 28 Dec 2016 (but of course - better every time from api creation date).
-% Limitation: we do not expect we will call single API more than 99 times per second.
--spec gen_nonce(NonceInInterval) -> Result when
-    NonceInInterval :: 1..99, % last incremental number (we should update number to 0 every N-seconds)
-    Result          :: return_nonce().
-
-gen_nonce(NonceInInterval) -> 
-    gen_nonce(?dec282016ms, NonceInInterval).
-
--spec gen_nonce(Since,NonceInInterval) -> Result when
-    Since           :: mlibs:mtime(),
-    NonceInInterval :: 1..99, 
-    Result          :: return_nonce().
-
-gen_nonce(Since,NonceInInterval) ->
-    gen_nonce('integer', Since, NonceInInterval).
-
-% @doc Generate monotonic nonce and produce input with defined type
--spec gen_nonce(OutType, Since, NonceInInterval) -> Result when
-    OutType         :: 'integer' | 'binary' | 'list',
-    Since           :: mlibs:mtime(),
-    NonceInInterval :: 1..99,
-    Result          :: return_nonce().
-
-gen_nonce(Type,Since,NonceInInterval) ->
-    Base = erlang:system_time('seconds')-erlang:convert_time_unit(Since, 'milli_seconds', 'seconds'),
-    gen_nonce_with_base(Type,NonceInInterval, Base).
-
 -spec gen_nonce_with_base(OutType, NonceInInterval, Base) -> Result when
     OutType         :: 'integer' | 'binary' | 'list',
-    NonceInInterval :: 1..99,
+    NonceInInterval :: 0..99,
     Base            :: nonce(),
-    Result          :: return_nonce().
+    Result          :: nonce() | 'next'.
 
 gen_nonce_with_base('list', NonceInInterval, Base) when NonceInInterval < 10 ->
-    {'normal',lists:append([integer_to_list(Base),"0",integer_to_list(NonceInInterval)])};
+    lists:append([integer_to_list(Base),"0",integer_to_list(NonceInInterval)]);
 gen_nonce_with_base('list', NonceInInterval, Base) when NonceInInterval < 99 ->
-    {'normal', lists:append([integer_to_list(Base), integer_to_list(NonceInInterval)])};
-gen_nonce_with_base('list', 99, Base) ->
-    {'next_interval_nonce_must_flush', lists:append([integer_to_list(Base),"99"])};
+    lists:append([integer_to_list(Base), integer_to_list(NonceInInterval)]);
 gen_nonce_with_base('integer', NonceInInterval, Base) when NonceInInterval < 10 ->
-    {'normal', list_to_integer(lists:append([integer_to_list(Base),"0",integer_to_list(NonceInInterval)]))};
+    list_to_integer(lists:append([integer_to_list(Base),"0",integer_to_list(NonceInInterval)]));
 gen_nonce_with_base('integer', NonceInInterval, Base) when NonceInInterval < 99 ->
-    {'normal', list_to_integer(lists:append([integer_to_list(Base), integer_to_list(NonceInInterval)]))};
-gen_nonce_with_base('integer', 99, Base) ->
-    {'next_interval_nonce_must_flush', list_to_integer(lists:append([integer_to_list(Base), "99"]))}.
+    list_to_integer(lists:append([integer_to_list(Base), integer_to_list(NonceInInterval)]));
+gen_nonce_with_base(_, 99, _) ->
+    'next'.
+
+
+% To decrease numbers in nonce, bu default we going to start from 28 Dec 2016 (but of course - better every time from api creation date).
+% Limitation: we do not expect we will call single API more than 99 times per second.
+%-spec gen_nonce(NonceInInterval) -> Result when
+%    NonceInInterval :: 1..99, % last incremental number (we should update number to 0 every N-seconds)
+%    Result          :: return_nonce().
+%
+%gen_nonce(NonceInInterval) ->
+%    gen_nonce(?dec282016ms, NonceInInterval).
+%
+%-spec gen_nonce(Since,NonceInInterval) -> Result when
+%    Since           :: mlibs:mtime(),
+%    NonceInInterval :: 1..99, 
+%    Result          :: return_nonce().
+%
+%gen_nonce(Since,NonceInInterval) ->
+%    gen_nonce('integer', Since, NonceInInterval).
+%
+%% @doc Generate monotonic nonce and produce input with defined type
+%-spec gen_nonce(OutType, Since, NonceInInterval) -> Result when
+%    OutType         :: 'integer' | 'binary' | 'list',
+%    Since           :: mlibs:mtime(),
+%    NonceInInterval :: 1..99,
+%    Result          :: return_nonce().
+%
+%gen_nonce(Type,Since,NonceInInterval) ->
+%    Base = erlang:system_time('seconds')-erlang:convert_time_unit(Since, 'milli_seconds', 'seconds'),
+%    gen_nonce_with_base(Type,NonceInInterval, Base).
+
+

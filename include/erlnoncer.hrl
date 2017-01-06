@@ -1,20 +1,20 @@
 
 -type nonce()       :: 1..4294967294 | binary() | list().
--type return_nonce():: {'normal' | 'next_interval_nonce_must_flush', nonce()}.
 
 -define(dec282016ms, 1482924639084).
--define(TAB, erlnoncer_tab).
 -record(nonce_track, {
         api_ref     :: term(),
         shift       :: 1..99
     }).
 -type nonce_track() :: #nonce_track{}.
 
--record(nonce_state, {
-        last_time_insec :: pos_integer(),
-        heartbeat_tref  :: reference()
+-record(noncer_state, {
+        last_time_insec     :: 'undefined' | pos_integer(), % undefined at start_link
+        heartbeat_freq      :: pos_integer(),
+        heartbeat_tref      :: 'undefined' | reference(),   % undefined at start_link
+        ets_table           :: 'undefined' | atom()         % undefined at start_link
     }).
--type nonce_state()  :: #nonce_state{}.
+-type noncer_state()  :: #noncer_state{}.
 
 -type start_prop()  :: #{
     'register' => register_as(),

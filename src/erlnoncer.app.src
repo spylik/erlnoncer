@@ -1,6 +1,6 @@
 {application,erlnoncer,
              [{description,"Incremental nonce number keeper (per instance) for Erlang/OTP."},
-              {vsn,"0.0.2"},
+              {vsn,"0.0.3"},
               {modules,[]},
               {registered,[erlnoncer_sup]},
               {applications,[kernel,stdlib]},
