@@ -4,7 +4,7 @@
 -define(dec282016ms, 1482924639084).
 -record(nonce_track, {
         api_ref     :: term(),
-        shift       :: 1..99
+        shift       :: 0..99
     }).
 -type nonce_track() :: #nonce_track{}.
 

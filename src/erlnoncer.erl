@@ -8,12 +8,8 @@
 %% Module for generate 10 digit nonce (max is 4294967294 what actually is 
 %% 11111111111111111111111111111110).
 %%
-%% Limitation: as we do not expect we will call single API more than 99 times per
-%% one scond, we must always use as call parameter NonceInInterval, what actually
-%% must be an integer between 1 and 99.
-%% 
-%% Possible strategies for flushing NonceInInterval:
-%% - in any case flush every time once reach 99
+%% Limitation: we do not expect we will call single API more than 99 times per 
+%% one second, so current implementation support nonces in this perspective.
 %% 
 %% @end
 %% --------------------------------------------------------------------------------
@@ -72,21 +68,38 @@ start_link(Prop) ->
     Result      :: {ok, NState},
     NState      :: noncer_state().
 
-init(InitState = #noncer_state{
-        heartbeat_freq = Heartbeat_freq
-    }) ->
-
+init(InitState) ->
     % we going to create ets table like 'erlnoncer_32423'
     TabName = ?TAB(self()),
     _ = ets:new(TabName, [ordered_set, private, {keypos, #nonce_track.api_ref}, named_table]),
+    {ok, flush(
+            InitState#noncer_state{
+                ets_table = TabName
+            }
+        )
+    }.
+
+% @doc flush trefs and data in ets
+-spec flush(State) -> NState when
+    State   :: noncer_state(),
+    NState  :: noncer_state().
+
+flush(State = #noncer_state{
+        heartbeat_tref = Heartbeat_tref,
+        heartbeat_freq = Heartbeat_freq,
+        ets_table = EtsTable
+    }) ->
+    _ = case Heartbeat_tref of 
+        'undefined' -> ok;
+        _ -> erlang:cancel_timer(Heartbeat_tref)
+    end,
     Time = erlang:system_time('seconds'),
+    % need to test what is faster - delete ets and create new for flush or ets:delete_all_objects
+    true = ets:delete_all_objects(EtsTable),
     TRef = erlang:send_after(Heartbeat_freq, self(), 'heartbeat'),
-    {ok, 
-        InitState#noncer_state{
-            last_time_insec = Time,
-            ets_table = TabName,
-            heartbeat_tref = TRef
-        }
+    State#noncer_state{
+            heartbeat_tref = TRef,
+            last_time_insec = Time 
     }.
 
 %--------------handle_call----------------
@@ -99,9 +112,10 @@ init(InitState = #noncer_state{
     State       :: noncer_state(),
     Result      :: {reply, term(), State}.
 
-handle_call({'gen_nonce', OutType, ApiRef, ApiBase}, _From, State = noncer_state{
+handle_call({'gen_nonce', OutType, ApiRef, ApiBase}, _From, State = #noncer_state{
         ets_table = EtsTable,
-        last_time_insec = Time
+        last_time_insec = Time,
+        heartbeat_freq = Heartbeat_freq
     }) ->
     Base = case ApiBase of
         {'second', Since} ->
@@ -125,13 +139,12 @@ handle_call({'gen_nonce', OutType, ApiRef, ApiBase}, _From, State = noncer_state
             NewShift
     end,
     {Nonce, NewState} = case gen_nonce_with_base(OutType, NonceInInterval, Base) of
-        'next' when heartbeat_freq =:= 1000 ->
+        'next' when Heartbeat_freq =:= 1000 ->
             {{'wait', 1000}, State};
         'next' ->
-            {Wait, NewState} = flush(State),
-            {{'wait', Wait}, NewState}, 
-        Nonce ->
-            {Nonce, State}
+            {{'wait', 1000}, flush(State)};
+        NonceDigit ->
+            {NonceDigit, State}
     end,
     {reply, Nonce, NewState};
 
@@ -141,8 +154,6 @@ handle_call(Msg, _From, State) ->
     {reply, ok, State}.
 
 %-----------end of handle_call-------------
-
-flush(State) ->
 
 %--------------handle_cast-----------------
 
@@ -171,22 +182,9 @@ handle_cast(Msg, State) ->
     State   :: noncer_state(),
     Result  :: {noreply, State}.
 
-% @doc flush all counters on hearbeat
-handle_info('heartbeat', State = #erlnoncer_state{
-        heartbeat_tref = Heartbeat_tref,
-        heartbeat_freq = Heartbeat_freq,
-        ets_table = EtsTable
-    }) ->
-    _ = erlang:cancel_timer(Heartbeat_tref),
-    Time = erlang:system_time('seconds'),
-    % need to test what is faster - delete ets and create new for flush or ets:delete_all_objects
-    true = ets:delete_all_objects(EtsTable),
-    TRef = erlang:send_after(Heartbeat_freq, self(), 'heartbeat'),
-    {noreply, State#erlnoncer_state{
-            heartbeat_tref = TRef,
-            last_time_insec = Time 
-        }
-    };
+% @doc hearbeat
+handle_info('heartbeat', State) ->
+    {noreply, flush(State)};
 
 %% handle_info for all other thigs
 handle_info(Msg, State) ->
