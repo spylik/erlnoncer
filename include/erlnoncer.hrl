@@ -1,5 +1,8 @@
-
 -type nonce()       :: 1..4294967294 | binary() | list().
+
+-define(TAB(Module, Pid), list_to_atom(lists:concat([Module, "_", pid_to_list(Pid)]))).
+
+-define(DefaultFreq, 1000).
 
 -define(dec282016ms, 1482924639084).
 -record(nonce_track, {

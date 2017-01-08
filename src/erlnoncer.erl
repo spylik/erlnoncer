@@ -26,12 +26,13 @@
     nonce/0
     ]).
 
--define(TAB(Pid), list_to_atom(lists:concat([?MODULE, "_", pid_to_list(Pid)]))).
-
 % @doc public api
 -export([
         start_link/0,
-        start_link/1
+        start_link/1,
+        stop/0,
+        stop/1,
+        stop/2
     ]).
 
 % @doc export standart gen_server api
@@ -53,7 +54,7 @@ start_link() ->
 start_link(Prop) ->
     RegisterAs = maps:get('register', Prop, 'undefined'),
     InitState = #noncer_state{
-        'heartbeat_freq' = maps:get('heartbeat_freq', Prop, 1000)
+        'heartbeat_freq' = maps:get('heartbeat_freq', Prop, ?DefaultFreq)
     },
     case RegisterAs =:= 'undefined' of
         true ->
@@ -61,6 +62,33 @@ start_link(Prop) ->
         false ->
             gen_server:start_link(RegisterAs, ?MODULE, InitState, [])
     end.
+
+% @doc API for stop gen_server with default name ?MODULE via sync call.
+-spec stop() -> Result when
+    Result  :: 'ok'.
+
+stop() ->
+    stop('sync', ?MODULE).
+
+% @doc API for stop gen_server. Default is sync call.
+-spec stop(Server) -> Result when
+    Server  :: atom(),
+    Result  :: 'ok'.
+
+stop(Server) ->
+    stop('sync', Server).
+
+% @doc API for stop gen_server. We support async casts and sync calls aswell.
+-spec stop(SyncAsync, Server) -> Result when
+    SyncAsync   :: 'sync' | 'async',
+    Server      :: atom(),
+    Result      :: 'ok'.
+
+stop('sync', Server) ->
+    gen_server:stop(Server);
+stop('async', Server) ->
+    gen_server:cast(Server, stop).
+
 
 % @doc init gen_server
 -spec init(InitState) -> Result when
@@ -70,7 +98,7 @@ start_link(Prop) ->
 
 init(InitState) ->
     % we going to create ets table like 'erlnoncer_32423'
-    TabName = ?TAB(self()),
+    TabName = ?TAB(?MODULE,self()),
     _ = ets:new(TabName, [ordered_set, private, {keypos, #nonce_track.api_ref}, named_table]),
     {ok, flush(
             InitState#noncer_state{
