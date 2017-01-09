@@ -32,7 +32,8 @@
 
 -export_type([
     nonce/0,
-    api_time/0
+    api_time/0,
+    start_prop/0
     ]).
 
 % @doc public api
