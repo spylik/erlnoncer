@@ -189,11 +189,19 @@ gen_server_init_routine_test_ () ->
                     end},
                 {<<"Able to get nonce update counter in ets">>,
                     fun() ->
+                        gen_nonce_testing('seconds', 'binary')
+                    end},
+                {<<"Able to get nonce update counter in ets">>,
+                    fun() ->
                         gen_nonce_testing('milli_seconds','integer')
                     end},
                 {<<"Able to get nonce update counter in ets">>,
                     fun() ->
                         gen_nonce_testing('milli_seconds', 'list')
+                    end},
+                {<<"Able to get nonce update counter in ets">>,
+                    fun() ->
+                        gen_nonce_testing('milli_seconds', 'binary')
                     end}
             ]
         }

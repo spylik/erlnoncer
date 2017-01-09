@@ -31,7 +31,9 @@
 -include("erlnoncer.hrl").
 
 -export_type([
-    nonce/0
+    nonce/0,
+    api_time/0,
+    start_prop/0
     ]).
 
 % @doc public api
@@ -295,6 +297,18 @@ gen_nonce_with_base('list', NonceInInterval, Base) when NonceInInterval < 10 ->
     lists:append([integer_to_list(Base),"0",integer_to_list(NonceInInterval)]);
 gen_nonce_with_base('list', NonceInInterval, Base) when NonceInInterval < 100 ->
     lists:append([integer_to_list(Base), integer_to_list(NonceInInterval)]);
+
+gen_nonce_with_base('binary', NonceInInterval, 0) ->
+    integer_to_binary(NonceInInterval);
+gen_nonce_with_base('binary', NonceInInterval, Base) when NonceInInterval < 10 ->
+    BB = integer_to_binary(Base),
+    EXT = <<"0">>,
+    NII = integer_to_binary(NonceInInterval),
+    <<BB/binary, EXT/binary, NII/binary>>;
+gen_nonce_with_base('binary', NonceInInterval, Base) when NonceInInterval < 100 ->
+    BB = integer_to_binary(Base), 
+    NII = integer_to_binary(NonceInInterval),
+    <<BB/binary, NII/binary>>;
 
 gen_nonce_with_base('integer', NonceInInterval, 0) ->
     NonceInInterval;
