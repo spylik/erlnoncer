@@ -23,6 +23,9 @@
 -define(NOTEST, true).
 -ifdef(TEST).
     -compile(export_all).
+    -define(ETSOPT, public).
+-else.
+    -define(ETSOPT, protected).
 -endif.
 
 -include("erlnoncer.hrl").
@@ -106,7 +109,8 @@ stop('async', Server) ->
 init(InitState) ->
     % we going to create ets table like 'erlnoncer_<pid>'
     TabName = ?TAB(?MODULE,self()),
-    _ = ets:new(TabName, [set, protected, {keypos, #nonce_track.api_ref}, named_table]),
+
+    _ = ets:new(TabName, [set, ?ETSOPT, {keypos, #nonce_track.api_ref}, named_table]),
     {ok, flush(
             InitState#noncer_state{
                 ets_table = TabName
@@ -155,7 +159,13 @@ nonce(OutType, ApiId, ApiCreatedTime) ->
     Result          :: nonce().
 
 nonce(Server, OutType, ApiId, ApiCreatedTime) ->
-    gen_server:call(Server, {'gen_nonce', OutType, ApiId, ApiCreatedTime}).
+    case gen_server:call(Server, {'gen_nonce', OutType, ApiId, ApiCreatedTime}) of
+        {'wait', Timeout} -> 
+            error_logger:info_msg("Reach max nonce in period for apiId ~p. Going to sleep for ~p",[ApiId, Timeout]),
+            timer:sleep(Timeout),
+            nonce(Server, OutType, ApiId, ApiCreatedTime);
+        Nonce -> Nonce
+    end.
 
 %--------------handle_call----------------
 
@@ -272,22 +282,24 @@ code_change(_OldVsn, State, _Extra) ->
 
 -spec gen_nonce_with_base(OutType, NonceInInterval, Base) -> Result when
     OutType         :: 'integer' | 'binary' | 'list',
-    NonceInInterval :: 0..99,
+    NonceInInterval :: shift_for_ms(),
     Base            :: nonce(),
     Result          :: nonce() | 'next'.
+
+gen_nonce_with_base(_, Num, _) when Num > 99 ->
+    'next';
 
 gen_nonce_with_base('list', NonceInInterval, 0) ->
     integer_to_list(NonceInInterval);
 gen_nonce_with_base('list', NonceInInterval, Base) when NonceInInterval < 10 ->
     lists:append([integer_to_list(Base),"0",integer_to_list(NonceInInterval)]);
-gen_nonce_with_base('list', NonceInInterval, Base) when NonceInInterval < 99 ->
+gen_nonce_with_base('list', NonceInInterval, Base) when NonceInInterval < 100 ->
     lists:append([integer_to_list(Base), integer_to_list(NonceInInterval)]);
 
 gen_nonce_with_base('integer', NonceInInterval, 0) ->
     NonceInInterval;
 gen_nonce_with_base('integer', NonceInInterval, Base) when NonceInInterval < 10 ->
     list_to_integer(lists:append([integer_to_list(Base),"0",integer_to_list(NonceInInterval)]));
-gen_nonce_with_base('integer', NonceInInterval, Base) when NonceInInterval < 99 ->
-    list_to_integer(lists:append([integer_to_list(Base), integer_to_list(NonceInInterval)]));
-gen_nonce_with_base(_, 99, _) ->
-    'next'.
+gen_nonce_with_base('integer', NonceInInterval, Base) when NonceInInterval < 100 ->
+    list_to_integer(lists:append([integer_to_list(Base), integer_to_list(NonceInInterval)])).
+

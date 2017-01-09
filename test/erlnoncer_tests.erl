@@ -170,7 +170,7 @@ gen_server_init_routine_test_ () ->
                         } = sys:get_state(?TESTSERVER),
                         ?assertEqual(?DefaultFreq, Heartbeat_freq1),
                         ?assertNotEqual('undefined', Heartbeat_tref1),
-                        timer:sleep(Heartbeat_freq1),
+                        timer:sleep(Heartbeat_freq1+1),
                         #noncer_state{
                             heartbeat_freq = Heartbeat_freq2,
                             heartbeat_tref = Heartbeat_tref2
@@ -179,48 +179,89 @@ gen_server_init_routine_test_ () ->
                         ?assertNotEqual('undefined', Heartbeat_tref2),
                         ?assertNotEqual(Heartbeat_tref1, Heartbeat_tref2)
                     end},
-                {<<"Able to get nonce as list, timeunit seconds and update counter in ets">>,
+                {<<"Able to get nonce update counter in ets">>,
                     fun() ->
-                        ApiId = erlang:unique_integer([monotonic,positive]),
-                        TimeUnit = 'seconds',
-                        OutType = 'list',
-                        Now = erlang:system_time(TimeUnit),
-                        #noncer_state{
-                            ets_table = EtsTable
-                        } = sys:get_state(?TESTSERVER),
-                        NonceOne = ?TESTMODULE:nonce(?TESTSERVER, OutType, ApiId, {TimeUnit,Now}),
-                        ?assertEqual("1", NonceOne),
-                        [#nonce_track{shift = Shift1}] = ets:lookup(EtsTable, ApiId),
-                        ?assertEqual(1, Shift1),
-                        NonceTwo = ?TESTMODULE:nonce(?TESTSERVER, OutType, ApiId, {TimeUnit,Now}),
-                        ?assertEqual("2", NonceTwo),
-                        [#nonce_track{shift = Shift2}] = ets:lookup(EtsTable, ApiId),
-                        ?assertEqual(2, Shift2)
+                        gen_nonce_testing('seconds', 'integer')
                     end},
-                {<<"Able to get nonce as integer, timeunit - seconds and update counter in ets">>,
+                {<<"Able to get nonce update counter in ets">>,
                     fun() ->
-                        ApiId = erlang:unique_integer([monotonic,positive]),
-                        TimeUnit = 'seconds',
-                        OutType = 'integer',
-                        Now = erlang:system_time(TimeUnit),
-                        #noncer_state{
-                            ets_table = EtsTable
-                        } = sys:get_state(?TESTSERVER),
-                        NonceOne = ?TESTMODULE:nonce(?TESTSERVER, OutType, ApiId, {TimeUnit,Now}),
-                        ?assertEqual(1, NonceOne),
-                        [#nonce_track{shift = Shift1}] = ets:lookup(EtsTable, ApiId),
-                        ?assertEqual(1, Shift1),
-                        NonceTwo = ?TESTMODULE:nonce(?TESTSERVER, OutType, ApiId, {TimeUnit,Now}),
-                        ?assertEqual(2, NonceTwo),
-                        [#nonce_track{shift = Shift2}] = ets:lookup(EtsTable, ApiId),
-                        ?assertEqual(2, Shift2)
+                        gen_nonce_testing('seconds', 'list')
+                    end},
+                {<<"Able to get nonce update counter in ets">>,
+                    fun() ->
+                        gen_nonce_testing('milli_seconds','integer')
+                    end},
+                {<<"Able to get nonce update counter in ets">>,
+                    fun() ->
+                        gen_nonce_testing('milli_seconds', 'list')
                     end}
-
             ]
         }
     }.
 
+gen_nonce_testing(TimeUnit, OutType) ->
+    #noncer_state{
+        ets_table = EtsTable,
+        heartbeat_freq = Heartbeat_freq
+    } = sys:get_state(?TESTSERVER),
 
+    ApiId = erlang:unique_integer([monotonic,positive]),
+    Now = erlang:system_time(TimeUnit),
+    NonceOne = ?TESTMODULE:nonce(?TESTSERVER, OutType, ApiId, {TimeUnit,Now}),
+    case OutType of 
+        'integer' ->
+            ?assertEqual(1, NonceOne);
+        'list' ->
+            ?assertEqual("1", NonceOne);
+        'binary' ->
+            ?assertEqual(<<"1">>, NonceOne)
+    end,
+    [#nonce_track{shift = Shift1}] = ets:lookup(EtsTable, ApiId),
+    ?assertEqual(1, Shift1),
+    NonceTwo = ?TESTMODULE:nonce(?TESTSERVER, OutType, ApiId, {TimeUnit,Now}),
+    case OutType of
+        'integer' ->
+            ?assertEqual(2, NonceTwo);
+        'list' ->
+            ?assertEqual("2", NonceTwo);
+        'binary' ->
+            ?assertEqual(<<"2">>, NonceTwo)
+    end,
+    
+    [#nonce_track{shift = Shift2}] = ets:lookup(EtsTable, ApiId),
+    ?assertEqual(2, Shift2),
+    
+    timer:sleep(Heartbeat_freq+1),
+    ?assertEqual([], ets:lookup(EtsTable, ApiId)),
+    
+    ets:insert(EtsTable, #nonce_track{
+        api_ref = ApiId,
+        shift = 98
+    }),
+    [#nonce_track{shift = Shift98}] = ets:lookup(EtsTable, ApiId),
+    ?assertEqual(98, Shift98),
+    
+    NonceNN = ?TESTMODULE:nonce(?TESTSERVER, OutType, ApiId, {TimeUnit,Now}),
+    case OutType of
+        'integer' ->
+            ?assertEqual(199, NonceNN);
+        'list' ->
+            ?assertEqual("199", NonceNN);
+        'binary' ->
+            ?assertEqual(<<"199">>, NonceNN)
+    end,
+    
+    NonceNS = ?TESTMODULE:nonce(?TESTSERVER, OutType, ApiId, {TimeUnit,Now}),
+    case OutType of
+        'integer' ->
+            ?assertEqual(201, NonceNS);
+        'list' ->
+            ?assertEqual("201", NonceNS);
+        'binary' ->
+            ?assertEqual(<<"201">>, NonceNS)
+    end,
+    [#nonce_track{shift = ShiftAfterFlush1}] = ets:lookup(EtsTable, ApiId),
+    ?assertEqual(1, ShiftAfterFlush1).
 
 setup_start() ->
     disable_output(),

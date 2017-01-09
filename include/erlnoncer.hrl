@@ -1,9 +1,10 @@
--type nonce()       :: 1..4294967294 | binary() | list().
+-type nonce()           :: 1..4294967294 | binary() | list().
 
--type server()      :: atom().
+-type server()          :: atom().
 
+-type out_type()        :: 'binary' | 'list' | 'integer'.
 
--type out_type()    :: 'binary' | 'list' | 'integer'.
+-type shift_for_ms()    :: 1..99.
 
 -define(TAB(Module, Pid), list_to_atom(lists:concat([Module, "_", pid_to_list(Pid)]))).
 
@@ -12,7 +13,7 @@
 -define(dec282016ms, 1482924639084).
 -record(nonce_track, {
         api_ref     :: term(),
-        shift       :: 1..99
+        shift       :: shift_for_ms()
     }).
 -type nonce_track() :: #nonce_track{}.
 
