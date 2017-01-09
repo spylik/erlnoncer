@@ -8,9 +8,14 @@
 %% Module for generate 10 digit nonce (max is 4294967294 what actually is 
 %% 11111111111111111111111111111110).
 %%
-%% Limitation: we do not expect we will call single API more than 99 times per 
-%% one second, so current implementation support nonces in this perspective.
-%% 
+%% Limitation: depend on selected scale we do not expect we will call single API more than:
+%%
+%% 99 times per one second (validity for api credentials will be 1.36 years) or 1 request per ~10 ms;
+%% 999 times per one minute (validity for api credentials will be 8.17 years) or 1 request per ~60 ms.
+%%
+%% For hight-performance API we should choose seconds scope (and in this case - do not forget to update API 
+%% credentials once it expired after 1 year), for slow API - minutes (and forget about update in for 8 years).
+%%
 %% @end
 %% --------------------------------------------------------------------------------
 -module(erlnoncer).
@@ -32,7 +37,9 @@
         start_link/1,
         stop/0,
         stop/1,
-        stop/2
+        stop/2,
+        nonce/4,
+        nonce/3
     ]).
 
 % @doc export standart gen_server api
@@ -72,7 +79,7 @@ stop() ->
 
 % @doc API for stop gen_server. Default is sync call.
 -spec stop(Server) -> Result when
-    Server  :: atom(),
+    Server  :: server(),
     Result  :: 'ok'.
 
 stop(Server) ->
@@ -81,7 +88,7 @@ stop(Server) ->
 % @doc API for stop gen_server. We support async casts and sync calls aswell.
 -spec stop(SyncAsync, Server) -> Result when
     SyncAsync   :: 'sync' | 'async',
-    Server      :: atom(),
+    Server      :: server(),
     Result      :: 'ok'.
 
 stop('sync', Server) ->
@@ -97,9 +104,9 @@ stop('async', Server) ->
     NState      :: noncer_state().
 
 init(InitState) ->
-    % we going to create ets table like 'erlnoncer_32423'
+    % we going to create ets table like 'erlnoncer_<pid>'
     TabName = ?TAB(?MODULE,self()),
-    _ = ets:new(TabName, [ordered_set, private, {keypos, #nonce_track.api_ref}, named_table]),
+    _ = ets:new(TabName, [set, protected, {keypos, #nonce_track.api_ref}, named_table]),
     {ok, flush(
             InitState#noncer_state{
                 ets_table = TabName
@@ -130,32 +137,52 @@ flush(State = #noncer_state{
             last_time_insec = Time 
     }.
 
+% @doc shortcut for nonce/4 with default servername ?MODULE
+-spec nonce(OutType, ApiId, ApiCreatedTime) -> Result when
+    OutType         :: out_type(),
+    ApiId           :: api_ref(),
+    ApiCreatedTime  :: api_time(),
+    Result          :: nonce().
+
+nonce(OutType, ApiId, ApiCreatedTime) ->
+    nonce(?MODULE, OutType, ApiId, ApiCreatedTime).
+
+-spec nonce(Server, OutType, ApiId, ApiCreatedTime) -> Result when
+    Server          :: server(),
+    OutType         :: out_type(),
+    ApiId           :: api_ref(),
+    ApiCreatedTime  :: api_time(),
+    Result          :: nonce().
+
+nonce(Server, OutType, ApiId, ApiCreatedTime) ->
+    gen_server:call(Server, {'gen_nonce', OutType, ApiId, ApiCreatedTime}).
+
 %--------------handle_call----------------
 
 % @doc callbacks for gen_server handle_call.
 -spec handle_call(Message, From, State) -> Result when
-    Message     :: term(),
+    Message     :: gen_nonce_msg(),
     From        :: {pid(), Tag},
     Tag         :: term(),
     State       :: noncer_state(),
     Result      :: {reply, term(), State}.
 
-handle_call({'gen_nonce', OutType, ApiRef, ApiBase}, _From, State = #noncer_state{
+handle_call({'gen_nonce', OutType, ApiRef, ApiCreatedTime}, _From, State = #noncer_state{
         ets_table = EtsTable,
         last_time_insec = Time,
         heartbeat_freq = Heartbeat_freq
     }) ->
-    Base = case ApiBase of
-        {'second', Since} ->
+    Base = case ApiCreatedTime of
+        {'seconds', Since} ->
             Time - Since;
-        {'millisecond', Since} ->
+        {'milli_seconds', Since} ->
             Time - erlang:convert_time_unit(Since, 'milli_seconds', 'seconds')
     end,
     NonceInInterval = case ets:lookup(EtsTable, ApiRef) of
         [] -> 
             ets:insert(EtsTable, #nonce_track{
                     api_ref = ApiRef,
-                    shift = 0
+                    shift = 1
                 }),
             1;
         [#nonce_track{shift = Shift}] ->
@@ -249,44 +276,18 @@ code_change(_OldVsn, State, _Extra) ->
     Base            :: nonce(),
     Result          :: nonce() | 'next'.
 
+gen_nonce_with_base('list', NonceInInterval, 0) ->
+    integer_to_list(NonceInInterval);
 gen_nonce_with_base('list', NonceInInterval, Base) when NonceInInterval < 10 ->
     lists:append([integer_to_list(Base),"0",integer_to_list(NonceInInterval)]);
 gen_nonce_with_base('list', NonceInInterval, Base) when NonceInInterval < 99 ->
     lists:append([integer_to_list(Base), integer_to_list(NonceInInterval)]);
+
+gen_nonce_with_base('integer', NonceInInterval, 0) ->
+    NonceInInterval;
 gen_nonce_with_base('integer', NonceInInterval, Base) when NonceInInterval < 10 ->
     list_to_integer(lists:append([integer_to_list(Base),"0",integer_to_list(NonceInInterval)]));
 gen_nonce_with_base('integer', NonceInInterval, Base) when NonceInInterval < 99 ->
     list_to_integer(lists:append([integer_to_list(Base), integer_to_list(NonceInInterval)]));
 gen_nonce_with_base(_, 99, _) ->
     'next'.
-
-
-% To decrease numbers in nonce, bu default we going to start from 28 Dec 2016 (but of course - better every time from api creation date).
-% Limitation: we do not expect we will call single API more than 99 times per second.
-%-spec gen_nonce(NonceInInterval) -> Result when
-%    NonceInInterval :: 1..99, % last incremental number (we should update number to 0 every N-seconds)
-%    Result          :: return_nonce().
-%
-%gen_nonce(NonceInInterval) ->
-%    gen_nonce(?dec282016ms, NonceInInterval).
-%
-%-spec gen_nonce(Since,NonceInInterval) -> Result when
-%    Since           :: mlibs:mtime(),
-%    NonceInInterval :: 1..99, 
-%    Result          :: return_nonce().
-%
-%gen_nonce(Since,NonceInInterval) ->
-%    gen_nonce('integer', Since, NonceInInterval).
-%
-%% @doc Generate monotonic nonce and produce input with defined type
-%-spec gen_nonce(OutType, Since, NonceInInterval) -> Result when
-%    OutType         :: 'integer' | 'binary' | 'list',
-%    Since           :: mlibs:mtime(),
-%    NonceInInterval :: 1..99,
-%    Result          :: return_nonce().
-%
-%gen_nonce(Type,Since,NonceInInterval) ->
-%    Base = erlang:system_time('seconds')-erlang:convert_time_unit(Since, 'milli_seconds', 'seconds'),
-%    gen_nonce_with_base(Type,NonceInInterval, Base).
-
-
